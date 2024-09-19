@@ -1,6 +1,6 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
 const { EmbedBuilder } = require('discord.js');
-const { getCooldown, setCooldown, getKey } = require('../config/database');
+const { getCooldown, setCooldown, getKey, getUserGlobalCooldown, setUserGlobalCooldown, getBlacklist } = require('../config/database');
 const { products, durations } = require('../config/constants');
 
 module.exports = {
@@ -23,14 +23,29 @@ module.exports = {
         const userId = interaction.user.id;
         const username = interaction.user.username;
 
-        const cooldown = await getCooldown(userId, product);
-        if (cooldown) {
-            const cooldownEnd = new Date(cooldown.cooldown_end);
+        // Check if user is blacklisted
+        const blacklist = await getBlacklist(userId);
+        if (blacklist) {
+            const blacklistEnd = new Date(blacklist.blacklist_end);
+            if (blacklistEnd > new Date()) {
+                const embed = new EmbedBuilder()
+                    .setColor('#FF0000')
+                    .setTitle('Blacklisted')
+                    .setDescription(`You are blacklisted until ${blacklistEnd.toISOString()}`);
+                await interaction.reply({ embeds: [embed], ephemeral: true });
+                return;
+            }
+        }
+
+        // Check for user-specific global cooldown
+        const userGlobalCooldown = await getUserGlobalCooldown(userId);
+        if (userGlobalCooldown) {
+            const cooldownEnd = new Date(userGlobalCooldown.cooldown_end);
             if (cooldownEnd > new Date()) {
                 const embed = new EmbedBuilder()
                     .setColor('#FF0000')
-                    .setTitle('Cooldown Active')
-                    .setDescription(`You are on cooldown for this product until ${cooldownEnd.toISOString()}`);
+                    .setTitle('Global Cooldown Active')
+                    .setDescription(`You are on cooldown until ${cooldownEnd.toISOString()}`);
                 await interaction.reply({ embeds: [embed], ephemeral: true });
                 return;
             }
@@ -51,7 +66,8 @@ module.exports = {
         else if (time === '168hr') cooldownEnd.setDate(cooldownEnd.getDate() + 7);
         else if (time === '730hr') cooldownEnd.setMonth(cooldownEnd.getMonth() + 1);
 
-        await setCooldown(userId, username, product, cooldownEnd);
+        await setCooldown(userId, product, cooldownEnd);
+        await setUserGlobalCooldown(userId, cooldownEnd);
 
         const logChannel = interaction.client.channels.cache.get(process.env.LOG_CHANNEL_ID);
         if (logChannel) {

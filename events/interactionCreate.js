@@ -1,5 +1,5 @@
 const { ActionRowBuilder, StringSelectMenuBuilder, EmbedBuilder } = require('discord.js');
-const { getCooldown, setCooldown, getKey, getAllKeys } = require('../config/database');
+const { getCooldown, setCooldown, getKey, getAllKeys, getUserGlobalCooldown, setUserGlobalCooldown, getBlacklist } = require('../config/database');
 const { products, durations } = require('../config/constants');
 
 module.exports = {
@@ -21,6 +21,37 @@ module.exports = {
                     value: product.value,
                 }));
 
+                // Check if user is blacklisted
+                const blacklist = await getBlacklist(interaction.user.id);
+                if (blacklist) {
+                    const blacklistEnd = new Date(blacklist.blacklist_end);
+                    if (blacklistEnd > new Date()) {
+                        const embed = new EmbedBuilder()
+                            .setColor('#FF0000')
+                            .setTitle('Blacklisted')
+                            .setDescription(`You are blacklisted until ${blacklistEnd.toISOString()}`);
+                        await interaction.reply({ embeds: [embed], ephemeral: true });
+                        return;
+                    }
+                }
+
+                // Check for user-specific global cooldown
+                const userGlobalCooldown = await getUserGlobalCooldown(interaction.user.id);
+                if (userGlobalCooldown) {
+                    const cooldownEnd = new Date(userGlobalCooldown.cooldown_end);
+                    if (cooldownEnd > new Date()) {
+                        const embed = new EmbedBuilder()
+                            .setColor('#FF0000')
+                            .setTitle('Global Cooldown Active')
+                            .setDescription(`You are on cooldown until ${cooldownEnd.toISOString()}`);
+                        await interaction.reply({ embeds: [embed], ephemeral: true });
+                        return;
+                    }
+                }
+
+                // Acknowledge the interaction immediately
+                await interaction.deferReply({ ephemeral: true });
+
                 const productSelect = new StringSelectMenuBuilder()
                     .setCustomId('select_product')
                     .setPlaceholder('Select a product')
@@ -28,8 +59,11 @@ module.exports = {
 
                 const row = new ActionRowBuilder().addComponents(productSelect);
 
-                await interaction.reply({ content: 'Select a product:', components: [row], ephemeral: true });
+                await interaction.editReply({ content: 'Select a product:', components: [row] });
             } else if (interaction.customId === 'check_stock') {
+                // Acknowledge the interaction immediately
+                await interaction.deferReply({ ephemeral: true });
+
                 const keys = await getAllKeys();
                 const stockMap = {};
 
@@ -57,12 +91,11 @@ module.exports = {
                     .setTitle('Stock Information')
                     .setDescription(stockMessage);
 
-                await interaction.reply({ embeds: [embed], ephemeral: true });
+                await interaction.editReply({ embeds: [embed] });
             }
         } else if (interaction.isStringSelectMenu()) {
             if (interaction.customId === 'select_product') {
                 const selectedProduct = interaction.values[0];
-
                 const timeOptions = durations.map(duration => ({
                     label: duration.name,
                     value: `${selectedProduct}:${duration.value}`,
@@ -78,7 +111,6 @@ module.exports = {
                 await interaction.update({ content: 'Select a time period:', components: [row], ephemeral: true });
             } else if (interaction.customId === 'select_time') {
                 const [selectedProduct, selectedTime] = interaction.values[0].split(':');
-
                 // Handle the selected product and time
                 await handleRedemption(interaction, selectedProduct, selectedTime);
             }
@@ -89,20 +121,34 @@ module.exports = {
 async function handleRedemption(interaction, product, time) {
     const userId = interaction.user.id;
     const username = interaction.user.username;
-
     if (!product || !time) {
         await interaction.reply({ content: 'Invalid product or time selection.', ephemeral: true });
         return;
     }
 
-    const cooldown = await getCooldown(userId, product);
-    if (cooldown) {
-        const cooldownEnd = new Date(cooldown.cooldown_end);
+    // Check if user is blacklisted
+    const blacklist = await getBlacklist(userId);
+    if (blacklist) {
+        const blacklistEnd = new Date(blacklist.blacklist_end);
+        if (blacklistEnd > new Date()) {
+            const embed = new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('Blacklisted')
+                .setDescription(`You are blacklisted until ${blacklistEnd.toISOString()}`);
+            await interaction.reply({ embeds: [embed], ephemeral: true });
+            return;
+        }
+    }
+
+    // Check for user-specific global cooldown
+    const userGlobalCooldown = await getUserGlobalCooldown(userId);
+    if (userGlobalCooldown) {
+        const cooldownEnd = new Date(userGlobalCooldown.cooldown_end);
         if (cooldownEnd > new Date()) {
             const embed = new EmbedBuilder()
                 .setColor('#FF0000')
-                .setTitle('Cooldown Active')
-                .setDescription(`You are on cooldown for this product until ${cooldownEnd.toISOString()}`);
+                .setTitle('Global Cooldown Active')
+                .setDescription(`You are on cooldown until ${cooldownEnd.toISOString()}`);
             await interaction.reply({ embeds: [embed], ephemeral: true });
             return;
         }
@@ -124,6 +170,7 @@ async function handleRedemption(interaction, product, time) {
     else if (time === '730hr') cooldownEnd.setMonth(cooldownEnd.getMonth() + 1);
 
     await setCooldown(userId, product, cooldownEnd);
+    await setUserGlobalCooldown(userId, cooldownEnd);
 
     const logChannel = interaction.client.channels.cache.get(process.env.LOG_CHANNEL_ID);
     if (logChannel) {
@@ -134,11 +181,13 @@ async function handleRedemption(interaction, product, time) {
         .setColor('#00FF00')
         .setTitle('Key Redeemed')
         .setDescription(`Your key for ${product} (${time}) is: ${key}`);
+
     await interaction.user.send({ embeds: [embed] });
 
     const replyEmbed = new EmbedBuilder()
         .setColor('#00FF00')
         .setTitle('Key Redeemed')
         .setDescription('The key has been sent to your DMs.');
+
     await interaction.reply({ embeds: [replyEmbed], ephemeral: true });
 }

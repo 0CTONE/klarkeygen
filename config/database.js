@@ -50,9 +50,35 @@ async function getKey(product, time) {
     return null;
 }
 
+async function getUserGlobalCooldown(userId) {
+    const conn = await connectToDatabase();
+    const [rows] = await conn.execute('SELECT * FROM user_global_cooldown WHERE user_id = ? LIMIT 1', [userId]);
+    return rows.length > 0 ? rows[0] : null;
+}
+
+async function setUserGlobalCooldown(userId, cooldownEnd) {
+    const conn = await connectToDatabase();
+    await conn.execute('REPLACE INTO user_global_cooldown (user_id, cooldown_end) VALUES (?, ?)', [userId, cooldownEnd.toISOString().slice(0, 19).replace('T', ' ')]);
+}
+
+async function getBlacklist(userId) {
+    const conn = await connectToDatabase();
+    const [rows] = await conn.execute('SELECT * FROM blacklist WHERE user_id = ? LIMIT 1', [userId]);
+    return rows.length > 0 ? rows[0] : null;
+}
+
+async function setBlacklist(userId, blacklistEnd) {
+    const conn = await connectToDatabase();
+    await conn.execute('REPLACE INTO blacklist (user_id, blacklist_end) VALUES (?, ?)', [userId, blacklistEnd.toISOString().slice(0, 19).replace('T', ' ')]);
+}
+
 module.exports = {
     getAllKeys,
     getCooldown,
     setCooldown,
     getKey,
+    getUserGlobalCooldown,
+    setUserGlobalCooldown,
+    getBlacklist,
+    setBlacklist,
 };
